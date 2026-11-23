@@ -39,6 +39,7 @@ $student_name = $_SESSION["full_name"];
     <nav aria-label="Main navigation">
         <a href="index.php">Home</a>
         <a href="student-dashboard.php">Student</a>
+        <a href="select-classes.php">Select Classes</a>
         <a href="logout.php">Logout</a>
     </nav>
 
@@ -61,6 +62,12 @@ $student_name = $_SESSION["full_name"];
     </section>
 
     <div class="grid">
+
+        <a class="card link-card" href="select-classes.php">
+            <span>New feature</span>
+            <h2>Select My Classes →</h2>
+            <p>Choose the classes you attend and personalise your timetable.</p>
+        </a>
 
         <a class="card link-card" href="timetable.php">
             <span>Open section</span>
