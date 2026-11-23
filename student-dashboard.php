@@ -1,3 +1,4 @@
+
 <?php
 session_start();
 
@@ -40,6 +41,7 @@ $student_name = $_SESSION["full_name"];
         <a href="index.php">Home</a>
         <a href="student-dashboard.php">Student</a>
         <a href="select-classes.php">Select Classes</a>
+        <a href="notifications.php">Notifications</a>
         <a href="logout.php">Logout</a>
     </nav>
 
@@ -64,7 +66,7 @@ $student_name = $_SESSION["full_name"];
     <div class="grid">
 
         <a class="card link-card" href="select-classes.php">
-            <span>New feature</span>
+            <span>Open section</span>
             <h2>Select My Classes →</h2>
             <p>Choose the classes you attend and personalise your timetable.</p>
         </a>
@@ -91,6 +93,12 @@ $student_name = $_SESSION["full_name"];
             <span>Open section</span>
             <h2>View reminders →</h2>
             <p>Stay updated with your reminders.</p>
+        </a>
+
+        <a class="card link-card" href="notifications.php">
+            <span>Open section</span>
+            <h2>Notifications →</h2>
+            <p>View automatic notifications about school items you need to pack.</p>
         </a>
 
     </div>

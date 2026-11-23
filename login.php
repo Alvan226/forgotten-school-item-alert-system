@@ -1,90 +1,157 @@
 
 <?php
+
+// Enable stronger session security before starting the session.
+ini_set('session.use_strict_mode', '1');
+ini_set('session.use_only_cookies', '1');
+
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'domain' => '',
+    'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+    'httponly' => true,
+    'samesite' => 'Lax'
+]);
+
 session_start();
+
 require_once 'includes/db.php';
 
 $error = "";
 
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+// Generate a CSRF token for the login form.
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
-    $email = trim($_POST["email"] ?? "");
-    $password = $_POST["password"] ?? "";
-    $role = $_POST["role"] ?? "";
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
-    // STUDENT AND ADMINISTRATOR LOGIN
-    if ($role === "student" || $role === "admin") {
+    // Verify the CSRF token.
+    $submitted_token = $_POST['csrf_token'] ?? '';
 
-        $stmt = $conn->prepare(
-            "SELECT student_id, full_name, email, password_hash, role
-             FROM STUDENT
-             WHERE email = ? AND role = ?"
-        );
+    if (
+        !is_string($submitted_token) ||
+        !hash_equals($_SESSION['csrf_token'], $submitted_token)
+    ) {
+        $error = "Invalid form submission. Please try again.";
 
-        $stmt->bind_param("ss", $email, $role);
-        $stmt->execute();
+    } else {
 
-        $result = $stmt->get_result();
+        $email = trim($_POST["email"] ?? "");
+        $password = $_POST["password"] ?? "";
+        $role = $_POST["role"] ?? "";
 
-        if ($result->num_rows === 1) {
+        // Validate submitted information.
+        if (
+            !is_string($email) ||
+            !filter_var($email, FILTER_VALIDATE_EMAIL) ||
+            !is_string($password) ||
+            !in_array($role, ['student', 'admin', 'course_admin'], true)
+        ) {
+            $error = "Incorrect email, password or account type.";
 
-            $user = $result->fetch_assoc();
+        } else {
 
-            if (password_verify($password, $user["password_hash"])) {
+            $user = null;
 
-                session_regenerate_id(true);
+            // STUDENT AND ADMINISTRATOR LOGIN
+            if ($role === "student" || $role === "admin") {
 
-                $_SESSION["student_id"] = $user["student_id"];
-                $_SESSION["full_name"] = $user["full_name"];
-                $_SESSION["email"] = $user["email"];
-                $_SESSION["role"] = $user["role"];
+                $stmt = $conn->prepare(
+                    "SELECT student_id, full_name, email, password_hash, role
+                     FROM STUDENT
+                     WHERE email = ? AND role = ?"
+                );
 
-                if ($role === "admin") {
-                    header("Location: admin-dashboard.php");
-                } else {
-                    header("Location: student-dashboard.php");
+                if ($stmt) {
+
+                    $stmt->bind_param("ss", $email, $role);
+                    $stmt->execute();
+
+                    $result = $stmt->get_result();
+
+                    if ($result->num_rows === 1) {
+                        $user = $result->fetch_assoc();
+                    }
+
+                    $stmt->close();
                 }
 
-                exit();
+                // COURSE ADMIN LOGIN
+            } elseif ($role === "course_admin") {
+
+                $stmt = $conn->prepare(
+                    "SELECT course_admin_id, full_name, email, password_hash
+                     FROM COURSE_ADMIN
+                     WHERE email = ?"
+                );
+
+                if ($stmt) {
+
+                    $stmt->bind_param("s", $email);
+                    $stmt->execute();
+
+                    $result = $stmt->get_result();
+
+                    if ($result->num_rows === 1) {
+                        $user = $result->fetch_assoc();
+                    }
+
+                    $stmt->close();
+                }
             }
-        }
 
-        $stmt->close();
+            // Verify the password.
+            if (
+                $user &&
+                password_verify($password, $user["password_hash"])
+            ) {
 
-    } elseif ($role === "course_admin") {
-
-        $stmt = $conn->prepare(
-            "SELECT course_admin_id, full_name, email, password_hash
-             FROM COURSE_ADMIN
-             WHERE email = ?"
-        );
-
-        $stmt->bind_param("s", $email);
-        $stmt->execute();
-
-        $result = $stmt->get_result();
-
-        if ($result->num_rows === 1) {
-
-            $user = $result->fetch_assoc();
-
-            if (password_verify($password, $user["password_hash"])) {
-
+                // Regenerate session ID after successful login.
                 session_regenerate_id(true);
 
-                $_SESSION["course_admin_id"] = $user["course_admin_id"];
-                $_SESSION["full_name"] = $user["full_name"];
-                $_SESSION["email"] = $user["email"];
-                $_SESSION["role"] = "course_admin";
+                // Remove any previous login information.
+                unset(
+                    $_SESSION['student_id'],
+                    $_SESSION['course_admin_id'],
+                    $_SESSION['full_name'],
+                    $_SESSION['email'],
+                    $_SESSION['role']
+                );
 
-                header("Location: course-admin-dashboard.php");
-                exit();
+                // Store the new login information.
+                if ($role === "student" || $role === "admin") {
+
+                    $_SESSION["student_id"] = $user["student_id"];
+                    $_SESSION["full_name"] = $user["full_name"];
+                    $_SESSION["email"] = $user["email"];
+                    $_SESSION["role"] = $user["role"];
+
+                    // Redirect according to account type.
+                    if ($role === "admin") {
+                        header("Location: admin-dashboard.php");
+                    } else {
+                        header("Location: student-dashboard.php");
+                    }
+
+                    exit();
+
+                } elseif ($role === "course_admin") {
+
+                    $_SESSION["course_admin_id"] = $user["course_admin_id"];
+                    $_SESSION["full_name"] = $user["full_name"];
+                    $_SESSION["email"] = $user["email"];
+                    $_SESSION["role"] = "course_admin";
+
+                    header("Location: course-admin-dashboard.php");
+                    exit();
+                }
             }
+
+            $error = "Incorrect email, password or account type.";
         }
-
-        $stmt->close();
     }
-
-    $error = "Incorrect email, password or account type.";
 }
 ?>
 
@@ -110,11 +177,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         <?php if (!empty($error)): ?>
             <p style="color: red;">
-                <?php echo htmlspecialchars($error); ?>
+                <?php echo htmlspecialchars($error, ENT_QUOTES, 'UTF-8'); ?>
             </p>
         <?php endif; ?>
 
         <form method="POST" action="login.php">
+
+            <!-- CSRF protection token -->
+            <input
+                type="hidden"
+                name="csrf_token"
+                value="<?php echo htmlspecialchars($_SESSION['csrf_token'], ENT_QUOTES, 'UTF-8'); ?>"
+            >
 
             <label for="role">Account Type:</label>
 
