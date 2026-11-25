@@ -4,12 +4,12 @@ session_start();
 require_once 'includes/db.php';
 
 // Only Administrators can access this page.
-if (!isset($_SESSION["student_id"]) || $_SESSION["role"] !== "admin") {
+if (!isset($_SESSION["student_id"]) || ($_SESSION["role"] ?? "") !== "admin") {
     header("Location: login.php");
     exit();
 }
 
-// Generate a CSRF protection token.
+// Generate CSRF protection token.
 if (empty($_SESSION["csrf_token"])) {
     $_SESSION["csrf_token"] = bin2hex(random_bytes(32));
 }
@@ -17,7 +17,7 @@ if (empty($_SESSION["csrf_token"])) {
 $message = "";
 $error = "";
 
-// Handle account deletion.
+// Handle form submissions.
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     $token = $_POST["csrf_token"] ?? "";
@@ -27,186 +27,294 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     } else {
 
-        $user_type = $_POST["user_type"] ?? "";
-        $user_id = (int)($_POST["user_id"] ?? 0);
+        $action = $_POST["action"] ?? "";
 
-        if ($user_id <= 0) {
-            $error = "Invalid account selected.";
+        // CREATE COURSE ADMIN ACCOUNT.
+        if ($action === "create_course_admin") {
 
-        } elseif ($user_type === "student") {
+            $full_name = trim($_POST["full_name"] ?? "");
+            $email = trim($_POST["email"] ?? "");
+            $password = $_POST["password"] ?? "";
+            $confirm_password = $_POST["confirm_password"] ?? "";
 
-            // Find the student account.
-            $stmt = $conn->prepare(
-                "SELECT email FROM STUDENT
-                 WHERE student_id = ? AND role = 'student'"
-            );
+            if ($full_name === "" || $email === "" ||
+                $password === "" || $confirm_password === "") {
 
-            $stmt->bind_param("i", $user_id);
-            $stmt->execute();
-            $student = $stmt->get_result()->fetch_assoc();
-            $stmt->close();
+                $error = "Please fill in all the fields.";
 
-            if (!$student) {
-                $error = "Student account not found.";
+            } elseif (strlen($full_name) > 100) {
+
+                $error = "The full name is too long.";
+
+            } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL) ||
+                      strlen($email) > 100) {
+
+                $error = "Please enter a valid email address.";
+
+            } elseif (strlen($password) < 8) {
+
+                $error = "The password must contain at least 8 characters.";
+
+            } elseif ($password !== $confirm_password) {
+
+                $error = "The passwords do not match.";
 
             } else {
 
-                try {
-                    $conn->begin_transaction();
+                // Check whether the email already exists.
+                $stmt = $conn->prepare(
+                    "SELECT email FROM COURSE_ADMIN WHERE email = ?
+                     UNION
+                     SELECT email FROM STUDENT WHERE email = ?"
+                );
 
-                    // Remove related checklist records.
-                    $stmt = $conn->prepare(
-                        "DELETE FROM CHECKLIST_STATUS WHERE student_id = ?"
+                $stmt->bind_param("ss", $email, $email);
+                $stmt->execute();
+
+                $existing_account = $stmt->get_result()->fetch_assoc();
+                $stmt->close();
+
+                if ($existing_account) {
+
+                    $error = "An account with this email address already exists.";
+
+                } else {
+
+                    // Securely hash the password.
+                    $password_hash = password_hash(
+                        $password,
+                        PASSWORD_DEFAULT
                     );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
 
-                    // Remove timetable assignments.
                     $stmt = $conn->prepare(
-                        "DELETE FROM STUDENT_TIMETABLE WHERE student_id = ?"
+                        "INSERT INTO COURSE_ADMIN
+                         (full_name, email, password_hash)
+                         VALUES (?, ?, ?)"
                     );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
 
-                    // Remove session records.
-                    $stmt = $conn->prepare(
-                        "DELETE FROM SESSION WHERE student_id = ?"
+                    $stmt->bind_param(
+                        "sss",
+                        $full_name,
+                        $email,
+                        $password_hash
                     );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
+
+                    if ($stmt->execute()) {
+
+                        $message = "Course Admin account created successfully.";
+
+                    } else {
+
+                        $error = "Could not create the Course Admin account.";
+
+                    }
+
                     $stmt->close();
-
-                    // Remove notification records.
-                    $stmt = $conn->prepare(
-                        "DELETE FROM NOTIFICATION WHERE student_id = ?"
-                    );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    // Remove password reset records.
-                    $stmt = $conn->prepare(
-                        "DELETE FROM PASSWORD_RESET WHERE email = ?"
-                    );
-                    $stmt->bind_param("s", $student["email"]);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    // Finally delete the student.
-                    $stmt = $conn->prepare(
-                        "DELETE FROM STUDENT
-                         WHERE student_id = ? AND role = 'student'"
-                    );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    $conn->commit();
-
-                    $message = "Student account deleted successfully.";
-
-                } catch (Throwable $e) {
-                    $conn->rollback();
-                    $error = "Could not delete the student account.";
                 }
             }
 
-        } elseif ($user_type === "course_admin") {
+        // HANDLE ACCOUNT DELETION.
+        } elseif ($action === "delete_user") {
 
-            // Find the Course Admin account.
-            $stmt = $conn->prepare(
-                "SELECT email FROM COURSE_ADMIN
-                 WHERE course_admin_id = ?"
-            );
+            $user_type = $_POST["user_type"] ?? "";
+            $user_id = (int)($_POST["user_id"] ?? 0);
 
-            $stmt->bind_param("i", $user_id);
-            $stmt->execute();
-            $admin = $stmt->get_result()->fetch_assoc();
-            $stmt->close();
+            if ($user_id <= 0) {
 
-            if (!$admin) {
-                $error = "Course Admin account not found.";
+                $error = "Invalid account selected.";
+
+            } elseif ($user_type === "student") {
+
+                // Find the student account.
+                $stmt = $conn->prepare(
+                    "SELECT email FROM STUDENT
+                     WHERE student_id = ? AND role = 'student'"
+                );
+
+                $stmt->bind_param("i", $user_id);
+                $stmt->execute();
+
+                $student = $stmt->get_result()->fetch_assoc();
+                $stmt->close();
+
+                if (!$student) {
+
+                    $error = "Student account not found.";
+
+                } else {
+
+                    try {
+
+                        $conn->begin_transaction();
+
+                        // Remove checklist records.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM CHECKLIST_STATUS WHERE student_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Remove timetable assignments.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM STUDENT_TIMETABLE WHERE student_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Remove session records.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM SESSION WHERE student_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Remove notifications.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM NOTIFICATION WHERE student_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Remove password reset records.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM PASSWORD_RESET WHERE email = ?"
+                        );
+                        $stmt->bind_param("s", $student["email"]);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Finally delete the student.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM STUDENT
+                             WHERE student_id = ? AND role = 'student'"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        $conn->commit();
+
+                        $message = "Student account deleted successfully.";
+
+                    } catch (Throwable $e) {
+
+                        $conn->rollback();
+                        $error = "Could not delete the student account.";
+
+                    }
+                }
+
+            } elseif ($user_type === "course_admin") {
+
+                // Find the Course Admin account.
+                $stmt = $conn->prepare(
+                    "SELECT email FROM COURSE_ADMIN
+                     WHERE course_admin_id = ?"
+                );
+
+                $stmt->bind_param("i", $user_id);
+                $stmt->execute();
+
+                $admin = $stmt->get_result()->fetch_assoc();
+                $stmt->close();
+
+                if (!$admin) {
+
+                    $error = "Course Admin account not found.";
+
+                } else {
+
+                    try {
+
+                        $conn->begin_transaction();
+
+                        // Remove checklist records linked to this admin's classes.
+                        $stmt = $conn->prepare(
+                            "DELETE cs FROM CHECKLIST_STATUS cs
+                             JOIN CLASS_ITEM_LINK cil
+                                ON cs.link_id = cil.link_id
+                             JOIN TIMETABLE_ENTRY t
+                                ON cil.timetable_id = t.timetable_id
+                             WHERE t.course_admin_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Remove student timetable assignments.
+                        $stmt = $conn->prepare(
+                            "DELETE st FROM STUDENT_TIMETABLE st
+                             JOIN TIMETABLE_ENTRY t
+                                ON st.timetable_id = t.timetable_id
+                             WHERE t.course_admin_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Remove class-item links.
+                        $stmt = $conn->prepare(
+                            "DELETE cil FROM CLASS_ITEM_LINK cil
+                             JOIN TIMETABLE_ENTRY t
+                                ON cil.timetable_id = t.timetable_id
+                             WHERE t.course_admin_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Remove timetable entries.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM TIMETABLE_ENTRY
+                             WHERE course_admin_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Remove password reset records.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM PASSWORD_RESET WHERE email = ?"
+                        );
+                        $stmt->bind_param("s", $admin["email"]);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        // Finally delete the Course Admin.
+                        $stmt = $conn->prepare(
+                            "DELETE FROM COURSE_ADMIN
+                             WHERE course_admin_id = ?"
+                        );
+                        $stmt->bind_param("i", $user_id);
+                        $stmt->execute();
+                        $stmt->close();
+
+                        $conn->commit();
+
+                        $message = "Course Admin account and associated timetable records deleted successfully.";
+
+                    } catch (Throwable $e) {
+
+                        $conn->rollback();
+                        $error = "Could not delete the Course Admin account.";
+
+                    }
+                }
 
             } else {
 
-                try {
-                    $conn->begin_transaction();
+                $error = "Invalid account type.";
 
-                    // Remove checklist records linked to this admin's classes.
-                    $stmt = $conn->prepare(
-                        "DELETE cs FROM CHECKLIST_STATUS cs
-                         JOIN CLASS_ITEM_LINK cil
-                            ON cs.link_id = cil.link_id
-                         JOIN TIMETABLE_ENTRY t
-                            ON cil.timetable_id = t.timetable_id
-                         WHERE t.course_admin_id = ?"
-                    );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    // Remove student timetable assignments.
-                    $stmt = $conn->prepare(
-                        "DELETE st FROM STUDENT_TIMETABLE st
-                         JOIN TIMETABLE_ENTRY t
-                            ON st.timetable_id = t.timetable_id
-                         WHERE t.course_admin_id = ?"
-                    );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    // Remove class-item links.
-                    $stmt = $conn->prepare(
-                        "DELETE cil FROM CLASS_ITEM_LINK cil
-                         JOIN TIMETABLE_ENTRY t
-                            ON cil.timetable_id = t.timetable_id
-                         WHERE t.course_admin_id = ?"
-                    );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    // Remove the admin's timetable entries.
-                    $stmt = $conn->prepare(
-                        "DELETE FROM TIMETABLE_ENTRY
-                         WHERE course_admin_id = ?"
-                    );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    // Remove password reset records.
-                    $stmt = $conn->prepare(
-                        "DELETE FROM PASSWORD_RESET WHERE email = ?"
-                    );
-                    $stmt->bind_param("s", $admin["email"]);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    // Finally delete the Course Admin.
-                    $stmt = $conn->prepare(
-                        "DELETE FROM COURSE_ADMIN
-                         WHERE course_admin_id = ?"
-                    );
-                    $stmt->bind_param("i", $user_id);
-                    $stmt->execute();
-                    $stmt->close();
-
-                    $conn->commit();
-
-                    $message = "Course Admin account and associated timetable records deleted successfully.";
-
-                } catch (Throwable $e) {
-                    $conn->rollback();
-                    $error = "Could not delete the Course Admin account.";
-                }
             }
 
         } else {
-            $error = "Invalid account type.";
+
+            $error = "Invalid request.";
+
         }
     }
 }
@@ -269,7 +377,7 @@ $course_admins = $conn->query(
 
         <h1>User Management</h1>
 
-        <p>View and manage registered Students and Course Administrators.</p>
+        <p>View, create and manage Students and Course Administrators.</p>
 
     </section>
 
@@ -285,6 +393,72 @@ $course_admins = $conn->query(
         </div>
     <?php endif; ?>
 
+
+    <!-- ADD COURSE ADMIN FORM -->
+    <section class="card">
+
+        <h2>Add Course Administrator</h2>
+
+        <p>Create a Course Admin account using the form below.</p>
+
+        <form method="POST" action="manage-users.php">
+
+            <input type="hidden" name="csrf_token"
+                   value="<?php echo htmlspecialchars($_SESSION["csrf_token"]); ?>">
+
+            <input type="hidden" name="action"
+                   value="create_course_admin">
+
+            <div class="form-group">
+                <label for="full_name">Full Name</label>
+
+                <input type="text"
+                       id="full_name"
+                       name="full_name"
+                       maxlength="100"
+                       required>
+            </div>
+
+            <div class="form-group">
+                <label for="email">Email Address</label>
+
+                <input type="email"
+                       id="email"
+                       name="email"
+                       maxlength="100"
+                       required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+
+                <input type="password"
+                       id="password"
+                       name="password"
+                       minlength="8"
+                       required>
+            </div>
+
+            <div class="form-group">
+                <label for="confirm_password">Confirm Password</label>
+
+                <input type="password"
+                       id="confirm_password"
+                       name="confirm_password"
+                       minlength="8"
+                       required>
+            </div>
+
+            <button type="submit" class="button">
+                Create Course Admin
+            </button>
+
+        </form>
+
+    </section>
+
+
+    <!-- REGISTERED STUDENTS -->
     <section class="card">
 
         <h2>Registered Students</h2>
@@ -333,6 +507,10 @@ $course_admins = $conn->query(
                                                value="<?php echo htmlspecialchars($_SESSION["csrf_token"]); ?>">
 
                                         <input type="hidden"
+                                               name="action"
+                                               value="delete_user">
+
+                                        <input type="hidden"
                                                name="user_type"
                                                value="student">
 
@@ -366,6 +544,8 @@ $course_admins = $conn->query(
 
     </section>
 
+
+    <!-- COURSE ADMINISTRATORS -->
     <section class="card">
 
         <h2>Course Administrators</h2>
@@ -414,6 +594,10 @@ $course_admins = $conn->query(
                                                value="<?php echo htmlspecialchars($_SESSION["csrf_token"]); ?>">
 
                                         <input type="hidden"
+                                               name="action"
+                                               value="delete_user">
+
+                                        <input type="hidden"
                                                name="user_type"
                                                value="course_admin">
 
@@ -459,3 +643,4 @@ $course_admins = $conn->query(
 <?php
 $conn->close();
 ?>
+

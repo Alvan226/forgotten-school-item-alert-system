@@ -53,7 +53,7 @@ $admin_name = htmlspecialchars($_SESSION["full_name"]);
 
         <p class="eyebrow">Course Admin</p>
 
-        <h1>Welcome, <?php echo $admin_name; ?>!</h1>
+        <h1>Welcome, <?php echo htmlspecialchars($_SESSION["full_name"]); ?>!</h1>
 
         <p>
             Manage class timetables and assign the school items
